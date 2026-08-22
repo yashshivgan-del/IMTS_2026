@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "block-sorting": {
+      "command": "C:\\Users\\karin\\Desktop\\IMTS 2026\\BlockSortingDemo\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "sim.mcp_server"],
+      "cwd": "C:\\Users\\karin\\Desktop\\IMTS 2026\\BlockSortingDemo",
+      "disabled": false
+    }
+  }
+}

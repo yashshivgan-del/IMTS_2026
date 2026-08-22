@@ -1,0 +1,117 @@
+# Karini IMTS 2026 - Block Sorting Demo Configuration
+#
+# Same philosophy as the inspection cell: every geometric number lives here.
+# Nothing is hardcoded in Python or JS. The sim and the arm must agree.
+
+site: sim-dev
+backend: sim              # sim | roarm
+units: mm
+
+# ---------------------------------------------------------------------------
+# Arm geometry (RoArm-M2 with gripper end-effector)
+# ---------------------------------------------------------------------------
+arm:
+  model: roarm-m2
+  base_height: 128.0        # floor -> shoulder pivot
+  upper_arm: 236.0          # shoulder -> elbow
+  forearm: 316.0            # elbow -> wrist
+  eoat: 110.0               # wrist -> gripper tip (longer than camera mount)
+  measured: false
+  joint_limits:
+    base:     [-180, 180]
+    shoulder: [-115, 115]
+    elbow:    [-135, 135]
+    wrist:    [-150, 150]
+  max_deg_per_sec: 40       # slow and deliberate for demos
+
+connection:
+  transport: serial
+  port: /dev/ttyUSB0
+  baud: 115200
+  read_timeout_s: 2.0
+
+# ---------------------------------------------------------------------------
+# Workspace envelope - cylindrical safety boundary
+# ---------------------------------------------------------------------------
+envelope:
+  radius: [100, 400]        # min/max horizontal distance from base axis
+  z: [0, 500]               # height above table
+  keep_out_front: 100
+
+# ---------------------------------------------------------------------------
+# Gripper configuration
+# ---------------------------------------------------------------------------
+gripper:
+  open_width: 60.0          # mm - fully open
+  close_width: 20.0         # mm - gripping a block
+  block_grip_width: 38.0    # mm - width when holding a 40mm block
+  actuate_time_s: 0.4       # time to open/close
+
+# ---------------------------------------------------------------------------
+# Blocks - colored cubes on the table
+# ---------------------------------------------------------------------------
+blocks:
+  size: 40.0                # mm - each block is a 40mm cube
+  colors:
+    - { id: green,  color: "#22c55e", label: "Green" }
+    - { id: red,    color: "#ef4444", label: "Red" }
+    - { id: yellow, color: "#eab308", label: "Yellow" }
+
+  # Starting positions (scattered on table, all verified reachable)
+  start_positions:
+    green:  { x: 350, y: -100 }
+    red:    { x: 350, y: 50 }
+    yellow: { x: 200, y: 150 }
+
+# ---------------------------------------------------------------------------
+# Slots - target positions where blocks get placed (in a row, separate area)
+# ---------------------------------------------------------------------------
+slots:
+  - { id: slot_1, label: "Slot 1", x: 250, y: -100 }
+  - { id: slot_2, label: "Slot 2", x: 250, y: 0 }
+  - { id: slot_3, label: "Slot 3", x: 250, y: 100 }
+
+# ---------------------------------------------------------------------------
+# Staging positions - temporary safe locations for blocks during re-sorting
+# Used when a destination slot is already occupied and the occupant needs
+# to be moved out of the way first. Must be reachable and not overlap
+# with slots or start positions.
+# ---------------------------------------------------------------------------
+staging:
+  - { id: stage_1, label: "Stage 1", x: 350, y: -100 }
+  - { id: stage_2, label: "Stage 2", x: 350, y: 50 }
+  - { id: stage_3, label: "Stage 3", x: 200, y: 150 }
+
+# ---------------------------------------------------------------------------
+# Pick and place heights (above table surface)
+# ---------------------------------------------------------------------------
+heights:
+  table_z: 0.0              # table surface
+  block_top_z: 40.0         # top of a block sitting on table
+  grip_z: 18.0              # height to grip block (centre of block)
+  lift_z: 150.0             # clearance height when carrying
+  approach_z: 80.0          # height to approach before lowering
+
+# ---------------------------------------------------------------------------
+# Home position (arm parked out of the way for camera view)
+# ---------------------------------------------------------------------------
+home:
+  joints: { base: 0.0, shoulder: 80.0, elbow: -60.0, wrist: -90.0 }
+
+# ---------------------------------------------------------------------------
+# Operational limits
+# ---------------------------------------------------------------------------
+limits:
+  max_blocks_per_plan: 6
+  max_plan_seconds: 90
+  cooldown_after_sorts: 30
+  cooldown_seconds: 45
+  min_seconds_between_moves: 0.3
+
+# ---------------------------------------------------------------------------
+# Vision (simulated overhead camera)
+# ---------------------------------------------------------------------------
+vision:
+  camera_height: 600.0       # mm above table
+  detection_confidence: 0.95 # simulated detection confidence
+  capture_dwell_s: 0.3       # settle time before "capture"

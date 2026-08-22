@@ -1,0 +1,5 @@
+aiohttp>=3.9
+PyYAML>=6.0
+fastmcp>=3.0
+# pyserial>=3.5   # lazy import, only for real arm
+pytest>=8.0

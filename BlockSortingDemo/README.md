@@ -1,0 +1,559 @@
+# Karini IMTS 2026 — Block Sorting Demo
+
+## What Is This Project?
+
+An **AI-powered robotic block sorting system** for the IMTS 2026 trade show demo.
+
+A user tells an AI copilot (in plain English) how to arrange colored blocks on a table. The AI understands the instruction, plans the pick-and-place operations, validates safety, and commands a robot arm to physically rearrange the blocks — while a live 3D visualization shows the entire process in real time.
+
+**The key message:**
+> The AI decides WHAT to do. The safety layer decides HOW to do it safely. The robot executes.
+
+---
+
+## Migration: Local Claude MCP → Karini Remote MCP
+
+### What Changed
+
+We migrated from a **local stdio-based MCP server** (used by Claude Desktop) to a **remote SSE-based MCP server** connected to the **Karini AI cloud platform** via ngrok.
+
+| Aspect | Before (Local) | After (Remote) |
+|--------|---------------|----------------|
+| MCP Client | Claude Desktop | Karini AI Platform (cloud) |
+| Transport | stdio (stdin/stdout) | SSE (Server-Sent Events over HTTP) |
+| Network | Localhost only | Internet-accessible via ngrok |
+| Launcher | `run_mcp.bat` | `run_mcp_remote.bat` |
+| Port | N/A (stdio) | 8803 (SSE) |
+| Platform | Single user, single machine | Cloud, multi-user, enterprise |
+| Observability | None | Karini built-in guardrails & tracing |
+
+### Why We Migrated
+
+1. **Cloud accessibility** — Karini platform runs in the cloud; it cannot spawn local processes
+2. **Enterprise features** — MCP Registry, guardrails, observability, governance out of the box
+3. **Multi-client support** — Same server can serve Karini, Kiro, Claude, Cursor simultaneously
+4. **Trade show ready** — Any device on the booth network can trigger the demo via Karini
+
+### What Was Modified
+
+**`sim/mcp_server.py`** — Added dual transport support:
+- `--transport stdio` (default, backward compatible with Claude Desktop / Kiro)
+- `--transport sse --host 0.0.0.0 --port 8803` (remote mode for Karini)
+- Fixed bridge server event loop for Windows thread compatibility
+
+**`run_mcp_remote.bat`** — New launcher for SSE mode
+
+**No changes to:** manager.py, kinematics.py, bridge.py, backends, config, or the 3D visualization. The MCP tools themselves are identical.
+
+---
+
+## Demo in 30 Seconds
+
+```
+User (via Karini Copilot):  "Sort the blocks: yellow, green, red"
+
+Karini Agent:  Calls detect_blocks() → sees 3 blocks on table
+               Calls plan_sort(["yellow","green","red"]) → plan approved
+               Calls execute_sort(plan_id) → robot starts moving
+
+Robot (sim):   Picks yellow → places in Slot 1
+               Picks green  → places in Slot 2
+               Picks red    → places in Slot 3
+
+Karini Agent:  "Done! Blocks arranged: yellow, green, red."
+```
+
+The browser shows the arm moving in real time at `http://127.0.0.1:8802`.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  KARINI AI PLATFORM (Cloud)                  │
+│                  app.karini.ai                               │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │  MCP Registry → Remote MCP Server: "block-sorting"  │    │
+│  │  Transport: SSE                                     │    │
+│  │  URL: https://<ngrok-url>/sse                       │    │
+│  └───────────────────────────┬─────────────────────────┘    │
+│                              │                              │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │  Karini Agent (LLM + Tools)                         │    │
+│  │  System prompt: sort blocks using MCP tools         │    │
+│  │  Available tools: detect, plan, execute, status,    │    │
+│  │                   reset                             │    │
+│  └───────────────────────────┬─────────────────────────┘    │
+└──────────────────────────────┼──────────────────────────────┘
+                               │
+                               │ HTTPS (SSE transport)
+                               │
+┌──────────────────────────────▼──────────────────────────────┐
+│                     NGROK TUNNEL                             │
+│          https://xxxx.ngrok-free.app → localhost:8803        │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+┌──────────────────────────────▼──────────────────────────────┐
+│                  LOCAL MACHINE (Your PC)                     │
+│                                                             │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │  MCP Server (port 8803, SSE)                          │  │
+│  │  sim/mcp_server.py --transport sse                    │  │
+│  │                                                       │  │
+│  │  5 Tools: detect_blocks, plan_sort, execute_sort,     │  │
+│  │           get_sort_status, reset_blocks               │  │
+│  └───────────────────────────┬───────────────────────────┘  │
+│                              │                              │
+│  ┌───────────────────────────▼───────────────────────────┐  │
+│  │  Cell Manager + Kinematics + Simulated Backend        │  │
+│  │  (Safety validation, IK, motion simulation)           │  │
+│  └───────────────────────────┬───────────────────────────┘  │
+│                              │                              │
+│  ┌───────────────────────────▼───────────────────────────┐  │
+│  │  Bridge Server (port 8802)                            │  │
+│  │  3D Visualization: http://127.0.0.1:8802              │  │
+│  │  WebSocket streaming at 20 Hz                         │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## How to Run the Project
+
+### Prerequisites
+
+- Python 3.12+
+- Windows 10/11
+- ngrok account (free tier works)
+
+### Step 1: Install Python Dependencies
+
+```powershell
+cd "C:\Users\karin\Desktop\IMTS 2026\BlockSortingDemo"
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+If you get `pydantic_core._pydantic_core` errors, force reinstall:
+```powershell
+.\.venv\Scripts\python.exe -m pip install --force-reinstall pydantic pydantic-core
+```
+
+### Step 2: Install ngrok
+
+```powershell
+winget install ngrok
+```
+
+Or with Chocolatey:
+```powershell
+choco install ngrok
+```
+
+Or manually download from: https://download.ngrok.com/windows
+
+### Step 3: Authenticate ngrok (one-time)
+
+1. Sign up at https://ngrok.com (free)
+2. Go to Dashboard → Your Authtoken
+3. Run:
+```powershell
+ngrok config add-authtoken YOUR_AUTH_TOKEN_HERE
+```
+
+### Step 4: Start the MCP Server (SSE mode)
+
+```powershell
+cd "C:\Users\karin\Desktop\IMTS 2026\BlockSortingDemo"
+& .\.venv\Scripts\python.exe -m sim.mcp_server --transport sse --host 0.0.0.0 --port 8803
+```
+
+You should see:
+```
+INFO  sim.mcp_server | bridge server starting on http://127.0.0.1:8802
+INFO  sim.mcp_server | Starting MCP server in SSE mode on 0.0.0.0:8803
+```
+
+### Step 5: Start ngrok Tunnel (separate terminal)
+
+```powershell
+ngrok http 8803
+```
+
+You'll see:
+```
+Session Status   online
+Forwarding       https://abc123.ngrok-free.app -> http://localhost:8803
+```
+
+Copy the `https://...ngrok-free.app` URL — you'll need this for Karini.
+
+### Step 6: Open 3D Visualization
+
+Open browser to: **http://127.0.0.1:8802**
+
+This shows the robot arm, blocks, and real-time animation.
+
+---
+
+## Karini Platform Setup Guide
+
+### Adding the Remote MCP Server
+
+1. Log into **https://app.karini.ai**
+2. Navigate to **MCP Registry** (left sidebar)
+3. Click the **"Remote MCP Servers"** tab
+4. Click **"Add new +"**
+5. Fill in the form:
+
+| Field | Value |
+|-------|-------|
+| **Server Name** | `block-sorting` |
+| **Configuration Method** | Manual Input |
+| **Description** | `Robot arm block sorting - detects, plans, and executes pick-and-place operations for colored blocks (IMTS 2026 demo)` |
+| **Transport Type** | SSE |
+| **URL** | `https://YOUR-NGROK-URL.ngrok-free.app/sse` |
+
+6. Click **"Add Server"**
+7. Server should show as connected (green toggle)
+
+### Testing with Karini MCP Test Panel
+
+Click the **"Test"** button or the server name to open the request/response panel.
+
+#### Test 1: List Tools
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/list"
+}
+```
+
+#### Test 2: Detect Blocks
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "detect_blocks",
+    "arguments": {}
+  }
+}
+```
+
+#### Test 3: Plan a Sort
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "tools/call",
+  "params": {
+    "name": "plan_sort",
+    "arguments": {
+      "sequence": ["red", "green", "yellow"]
+    }
+  }
+}
+```
+
+#### Test 4: Execute Sort (use plan_id from Test 3 response)
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "method": "tools/call",
+  "params": {
+    "name": "execute_sort",
+    "arguments": {
+      "plan_id": "plan_XXXXX"
+    }
+  }
+}
+```
+
+#### Test 5: Check Status (use job_id from Test 4 response)
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 5,
+  "method": "tools/call",
+  "params": {
+    "name": "get_sort_status",
+    "arguments": {
+      "job_id": "job_XXXXX"
+    }
+  }
+}
+```
+
+#### Test 6: Reset Blocks
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 6,
+  "method": "tools/call",
+  "params": {
+    "name": "reset_blocks",
+    "arguments": {}
+  }
+}
+```
+
+### Adding to a Karini Agent
+
+1. Go to **Agents** → Create or edit an agent
+2. Under **Tools**, add the `block-sorting` MCP server from the registry
+3. Add this system prompt:
+
+```
+You are a robotic sorting assistant. You control a robot arm that arranges colored blocks on a table.
+
+Available blocks: green, red, yellow
+Available slots: Slot 1, Slot 2, Slot 3
+
+Workflow — always follow these steps in order:
+1. Call detect_blocks() to see current block positions
+2. Call plan_sort(sequence) with the desired color order
+   - sequence[0] → Slot 1, sequence[1] → Slot 2, sequence[2] → Slot 3
+3. If plan is approved, call execute_sort(plan_id)
+4. Poll get_sort_status(job_id) until state is "done"
+5. Report results to the user
+6. Call reset_blocks() if the user wants to start over
+
+Rules:
+- Always detect before planning
+- Never skip plan_sort — you can't move the arm directly
+- Valid block IDs: green, red, yellow
+- If plan_sort returns violations, explain the issue and re-plan
+```
+
+4. Test in Karini **Playground**: Ask "Sort the blocks alphabetically"
+
+---
+
+## Running Modes Summary
+
+### Mode 1: Local with Kiro IDE
+
+```powershell
+cd "C:\Users\karin\Desktop\IMTS 2026\BlockSortingDemo"
+& .\.venv\Scripts\python.exe -m sim.mcp_server
+```
+
+Uses stdio transport. Configured in `.kiro/settings/mcp.json`:
+```json
+{
+  "mcpServers": {
+    "block-sorting": {
+      "command": "C:\\Users\\karin\\Desktop\\IMTS 2026\\BlockSortingDemo\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "sim.mcp_server"],
+      "cwd": "C:\\Users\\karin\\Desktop\\IMTS 2026\\BlockSortingDemo",
+      "disabled": false
+    }
+  }
+}
+```
+
+### Mode 2: Local with Claude Desktop
+
+Same as Kiro but configured in Claude's config:
+```json
+{
+  "mcpServers": {
+    "block-sorting": {
+      "command": "cmd.exe",
+      "args": ["/c", "C:\\Users\\karin\\Desktop\\IMTS 2026\\BlockSortingDemo\\run_mcp.bat"]
+    }
+  }
+}
+```
+
+### Mode 3: Remote with Karini AI (current production setup)
+
+Terminal 1 — MCP Server:
+```powershell
+cd "C:\Users\karin\Desktop\IMTS 2026\BlockSortingDemo"
+& .\.venv\Scripts\python.exe -m sim.mcp_server --transport sse --host 0.0.0.0 --port 8803
+```
+
+Terminal 2 — ngrok tunnel:
+```powershell
+ngrok http 8803
+```
+
+Then register the ngrok URL in Karini MCP Registry (Remote MCP Servers tab).
+
+### Mode 4: Browser-only (no AI, manual buttons)
+
+```powershell
+cd "C:\Users\karin\Desktop\IMTS 2026\BlockSortingDemo"
+& .\.venv\Scripts\python.exe -m sim.bridge
+```
+
+Open http://127.0.0.1:8801 and use the sort buttons in the sidebar.
+
+---
+
+## Stable URL for Production (IMTS Booth)
+
+The free ngrok tier generates a random URL each restart. For the trade show:
+
+**Option A: ngrok static domain (free)**
+1. Go to ngrok Dashboard → Domains → New Domain
+2. Claim a name like `karini-imts-demo.ngrok-free.app`
+3. Start with:
+```powershell
+ngrok http 8803 --url=karini-imts-demo.ngrok-free.app
+```
+
+**Option B: Fixed IP on booth network**
+- No ngrok needed
+- Set Karini Remote MCP URL to `http://<booth-machine-ip>:8803/sse`
+
+**Option C: Deploy to cloud VM**
+- Run the MCP server on EC2/Azure VM
+- Fixed public IP, no tunnel needed
+
+---
+
+## Project Structure
+
+```
+BlockSortingDemo/
+├── config/
+│   └── cell.yaml              ← All geometry, blocks, slots, limits
+├── sim/
+│   ├── __init__.py
+│   ├── kinematics.py          ← FK, IK, envelope checks
+│   ├── config.py              ← Loads YAML into typed objects
+│   ├── manager.py             ← Safety, plan validation, execution
+│   ├── mcp_server.py          ← 5 MCP tools (stdio + SSE dual transport)
+│   ├── bridge.py              ← HTTP + WebSocket server for 3D viz
+│   └── backends/
+│       ├── __init__.py
+│       ├── base.py            ← Backend protocol definition
+│       └── simulated.py       ← Simulated arm + gripper + vision
+├── static/
+│   ├── index.html             ← Dark booth UI
+│   ├── app.js                 ← Three.js 3D scene
+│   └── vendor/
+│       └── three.module.min.js
+├── .kiro/
+│   └── settings/
+│       └── mcp.json           ← Kiro IDE MCP configuration
+├── requirements.txt
+├── run_mcp.bat                ← Launcher: stdio mode (Claude/Kiro)
+├── run_mcp_remote.bat         ← Launcher: SSE mode (Karini remote)
+├── test_mcp.py                ← Standalone MCP tool test
+└── .venv/                     ← Python virtual environment
+```
+
+---
+
+## MCP Tools Reference
+
+| Tool | Parameters | Returns |
+|------|-----------|---------|
+| `detect_blocks` | none | `{blocks: [{id, color, label, x, y}], slots: [...]}` |
+| `plan_sort` | `sequence: ["green","red","yellow"]` | `{ok, plan_id, operations, est_seconds, violations}` |
+| `execute_sort` | `plan_id: "plan_xxx"` | `{ok, job_id}` |
+| `get_sort_status` | `job_id: "job_xxx"` | `{state, pct, current_action, completed_ops}` |
+| `reset_blocks` | none | `{ok, block_positions}` |
+
+### Sequence mapping:
+- `sequence[0]` → Slot 1
+- `sequence[1]` → Slot 2
+- `sequence[2]` → Slot 3
+
+### Valid block IDs: `green`, `red`, `yellow`
+
+---
+
+## Safety Architecture
+
+```
+┌──────────────────────────────────────┐
+│  AI IS ALLOWED TO DECIDE             │
+│  ✓ What order to sort blocks         │
+│  ✓ Which blocks to move              │
+│  ✓ When to start/stop                │
+└──────────────────────────────────────┘
+
+┌──────────────────────────────────────┐
+│  AI IS NOT ALLOWED TO DECIDE         │
+│  ✗ Raw joint angles                  │
+│  ✗ Motor commands                    │
+│  ✗ Gripper force / speed             │
+│  ✗ Safety limits                     │
+└──────────────────────────────────────┘
+```
+
+**Structural guarantee:** `execute_sort()` only accepts a `plan_id` minted by `plan_sort()`. Single-use, expires after 120 seconds. Enforced by code, not by prompts.
+
+---
+
+## Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CELL_BACKEND` | `sim` | `sim` or `roarm` |
+| `CELL_CONFIG` | `config/cell.yaml` | Path to config file |
+| `SIM_TIME_SCALE` | `1.0` | Slow down sim for demos (try `3.0`) |
+| `SIM_FAIL_EVERY` | `0` | Inject fault every N moves |
+
+---
+
+## Troubleshooting
+
+### `pydantic_core._pydantic_core` ModuleNotFoundError
+```powershell
+.\.venv\Scripts\python.exe -m pip install --force-reinstall pydantic pydantic-core
+```
+
+### `@echo off` errors when running .bat in PowerShell
+Don't run .bat files directly in PowerShell. Use either:
+```powershell
+cmd /c run_mcp_remote.bat
+```
+Or run the Python command directly:
+```powershell
+& .\.venv\Scripts\python.exe -m sim.mcp_server --transport sse --host 0.0.0.0 --port 8803
+```
+
+### 3D visualization not showing arm movement
+- Make sure you're running **one** process (not separate MCP + bridge)
+- The `mcp_server.py` starts the bridge automatically on port 8802
+- Open `http://127.0.0.1:8802` and keep it visible while sending MCP commands
+
+### ngrok URL changed after restart
+Free tier gives random URLs. Use a static domain:
+```powershell
+ngrok http 8803 --url=your-name.ngrok-free.app
+```
+Then update the URL in Karini MCP Registry.
+
+---
+
+## Milestones
+
+- [x] Simulated backend with real-time motion
+- [x] Forward and inverse kinematics
+- [x] Safety manager with plan validation
+- [x] MCP server with 5 tools
+- [x] Three.js 3D visualization
+- [x] WebSocket live streaming (20 Hz)
+- [x] Claude Desktop integration (local stdio)
+- [x] Kiro IDE integration (local stdio)
+- [x] SSE transport for remote connections
+- [x] ngrok tunnel setup
+- [x] Karini AI platform integration (Remote MCP Server)
+- [x] All 5 MCP tools verified via Karini test panel
+- [ ] Real RoArm-M2 backend (`roarm.py`)
+- [ ] USB camera + OpenCV color detection
+- [ ] Physical calibration
+- [ ] Karini Agent with system prompt (Playground tested)
+- [ ] Trade show packaging and fallback testing
