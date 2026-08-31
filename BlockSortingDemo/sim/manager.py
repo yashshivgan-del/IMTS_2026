@@ -431,6 +431,338 @@ class CellManager:
             "est_seconds": round(est, 1),
         }
 
+    # -- state-based planning ---------------------------------------------- #
+
+    def plan_arrangement(self, target_state: dict[str, str]) -> dict:
+        """Plan moves to reach a desired board state with minimal changes.
+
+        target_state: dict mapping slot_id → block_id for slots that should change.
+            e.g. {"slot_2": "green"} means "put green in slot 2, leave others as-is"
+            e.g. {"slot_1": "red", "slot_2": "green", "slot_3": "yellow"} full arrangement
+
+        Slots not mentioned in target_state remain unchanged.
+        The planner computes the minimal set of moves, handling conflicts
+        (relocating blocks from occupied destination slots) automatically.
+        """
+        violations: list[Violation] = []
+
+        if not target_state:
+            violations.append(Violation("EMPTY_TARGET", "Target state must specify at least one slot."))
+            return {"ok": False, "plan_id": None, "violations": [v.__dict__ for v in violations]}
+
+        # Validate slot IDs
+        valid_slot_ids = set(self.cfg.slots.keys())
+        for slot_id in target_state:
+            if slot_id not in valid_slot_ids:
+                violations.append(Violation(
+                    "UNKNOWN_SLOT",
+                    f"No slot '{slot_id}'. Available: {list(valid_slot_ids)}"
+                ))
+
+        # Validate block IDs
+        for slot_id, block_id in target_state.items():
+            if block_id not in self.cfg.blocks:
+                violations.append(Violation(
+                    "UNKNOWN_BLOCK",
+                    f"No block '{block_id}'. Available: {list(self.cfg.blocks.keys())}"
+                ))
+
+        # Check for duplicate blocks in target
+        target_blocks = list(target_state.values())
+        if len(set(target_blocks)) != len(target_blocks):
+            violations.append(Violation("DUPLICATE", "A block cannot be placed in multiple slots."))
+
+        if violations:
+            return {"ok": False, "plan_id": None, "violations": [v.__dict__ for v in violations]}
+
+        # Get current state
+        block_positions = self.backend.get_block_positions()
+        block_slots = self.backend.get_block_slots()  # {block_id: slot_id or None}
+
+        # Build current slot→block map
+        current_slot_to_block: dict[str, str | None] = {}
+        for slot_id in valid_slot_ids:
+            current_slot_to_block[slot_id] = None
+        for bid, sid in block_slots.items():
+            if sid is not None and sid in current_slot_to_block:
+                current_slot_to_block[sid] = bid
+
+        # Build the full desired state: merge target with current for unmentioned slots
+        desired_slot_to_block: dict[str, str | None] = dict(current_slot_to_block)
+        for slot_id, block_id in target_state.items():
+            desired_slot_to_block[slot_id] = block_id
+
+        # Check if a block appears both in an unchanged slot AND a target slot
+        # (i.e., block is currently in slot X and target says put it in slot Y)
+        # In that case we need to move it, which means slot X becomes empty — that's fine.
+
+        # Determine which slots actually need to change
+        changes: list[tuple[str, str]] = []  # (slot_id, desired_block_id)
+        for slot_id, desired_block in desired_slot_to_block.items():
+            if desired_block is None:
+                continue
+            current_block = current_slot_to_block.get(slot_id)
+            if current_block != desired_block:
+                changes.append((slot_id, desired_block))
+
+        if not changes:
+            return {
+                "ok": True,
+                "plan_id": None,
+                "message": "Board already matches the requested state. No moves needed.",
+                "violations": [],
+                "operations": [],
+                "est_seconds": 0,
+            }
+
+        # Build operations using the same conflict-aware logic as plan_sort
+        slot_list_map = self.cfg.slots  # dict[str, Slot]
+        operations: list[_PickPlaceOp] = []
+        est = 0.0
+        grip_z = float(self.cfg.heights["grip_z"])
+        prev_joints = self.backend.read_joints()
+
+        # Track simulated state during planning
+        sim_positions: dict[str, dict[str, float]] = dict(block_positions)
+        sim_slot_occupants: dict[str, str] = {}
+        for bid, sid in block_slots.items():
+            if sid is not None:
+                sim_slot_occupants[sid] = bid
+
+        staging_list = list(self.cfg.staging.values())
+        used_staging: set[str] = set()
+
+        for slot_id, desired_block in changes:
+            slot = slot_list_map[slot_id]
+            block = self.cfg.blocks[desired_block]
+
+            # Check if destination slot is occupied by a different block
+            occupant = sim_slot_occupants.get(slot_id)
+            if occupant is not None and occupant != desired_block:
+                # Check if this occupant has a place in the desired state elsewhere
+                # If so, it will be moved later. If not, move to staging.
+                occupant_target_slot = None
+                for s_id, b_id in changes:
+                    if b_id == occupant:
+                        occupant_target_slot = s_id
+                        break
+
+                if occupant_target_slot is None:
+                    # Occupant is not needed elsewhere in the plan — move to staging
+                    staging_spot = None
+                    for spot in staging_list:
+                        if spot.id in used_staging:
+                            continue
+                        spot_free = True
+                        for bid, bpos in sim_positions.items():
+                            if bid == occupant:
+                                continue
+                            dx = bpos["x"] - spot.x
+                            dy = bpos["y"] - spot.y
+                            if abs(dx) < 30 and abs(dy) < 30:
+                                spot_free = False
+                                break
+                        if spot_free:
+                            staging_spot = spot
+                            used_staging.add(spot.id)
+                            break
+
+                    if staging_spot is None:
+                        violations.append(Violation(
+                            "NO_STAGING",
+                            f"No staging spot to relocate '{occupant}' from {slot_id}."
+                        ))
+                        continue
+
+                    occ_pos = sim_positions.get(occupant)
+                    if occ_pos is None:
+                        violations.append(Violation("BLOCK_NOT_FOUND", f"Occupant '{occupant}' position unknown."))
+                        continue
+
+                    occ_pick = self.cfg.kin.inverse(occ_pos["x"], occ_pos["y"], grip_z)
+                    stg_place = self.cfg.kin.inverse(staging_spot.x, staging_spot.y, grip_z)
+                    if occ_pick is None or stg_place is None:
+                        violations.append(Violation("UNREACHABLE", f"Cannot relocate '{occupant}'."))
+                        continue
+
+                    occ_block = self.cfg.blocks[occupant]
+                    operations.append(_PickPlaceOp(
+                        block_id=occupant,
+                        block_label=occ_block.label,
+                        slot_id=staging_spot.id,
+                        slot_label=staging_spot.label,
+                        pick_x=occ_pos["x"],
+                        pick_y=occ_pos["y"],
+                        place_x=staging_spot.x,
+                        place_y=staging_spot.y,
+                    ))
+                    sim_positions[occupant] = {"x": staging_spot.x, "y": staging_spot.y}
+                    del sim_slot_occupants[slot_id]
+                    est += self.cfg.kin.travel_seconds(prev_joints, occ_pick)
+                    est += 3.0
+                    est += self.cfg.kin.travel_seconds(occ_pick, stg_place)
+                    est += 3.0
+                    prev_joints = stg_place
+
+                else:
+                    # Occupant will be moved later — still need to get it out of the way now
+                    staging_spot = None
+                    for spot in staging_list:
+                        if spot.id in used_staging:
+                            continue
+                        spot_free = True
+                        for bid, bpos in sim_positions.items():
+                            if bid == occupant:
+                                continue
+                            dx = bpos["x"] - spot.x
+                            dy = bpos["y"] - spot.y
+                            if abs(dx) < 30 and abs(dy) < 30:
+                                spot_free = False
+                                break
+                        if spot_free:
+                            staging_spot = spot
+                            used_staging.add(spot.id)
+                            break
+
+                    if staging_spot is None:
+                        violations.append(Violation(
+                            "NO_STAGING",
+                            f"No staging spot to relocate '{occupant}' from {slot_id}."
+                        ))
+                        continue
+
+                    occ_pos = sim_positions.get(occupant)
+                    if occ_pos is None:
+                        violations.append(Violation("BLOCK_NOT_FOUND", f"Occupant '{occupant}' position unknown."))
+                        continue
+
+                    occ_pick = self.cfg.kin.inverse(occ_pos["x"], occ_pos["y"], grip_z)
+                    stg_place = self.cfg.kin.inverse(staging_spot.x, staging_spot.y, grip_z)
+                    if occ_pick is None or stg_place is None:
+                        violations.append(Violation("UNREACHABLE", f"Cannot relocate '{occupant}'."))
+                        continue
+
+                    occ_block = self.cfg.blocks[occupant]
+                    operations.append(_PickPlaceOp(
+                        block_id=occupant,
+                        block_label=occ_block.label,
+                        slot_id=staging_spot.id,
+                        slot_label=staging_spot.label,
+                        pick_x=occ_pos["x"],
+                        pick_y=occ_pos["y"],
+                        place_x=staging_spot.x,
+                        place_y=staging_spot.y,
+                    ))
+                    sim_positions[occupant] = {"x": staging_spot.x, "y": staging_spot.y}
+                    del sim_slot_occupants[slot_id]
+                    est += self.cfg.kin.travel_seconds(prev_joints, occ_pick)
+                    est += 3.0
+                    est += self.cfg.kin.travel_seconds(occ_pick, stg_place)
+                    est += 3.0
+                    prev_joints = stg_place
+
+            # Now place the desired block into the slot
+            # First check if it's already there
+            current_slot_of_block = None
+            for sid, bid in sim_slot_occupants.items():
+                if bid == desired_block:
+                    current_slot_of_block = sid
+                    break
+
+            if current_slot_of_block == slot_id:
+                continue  # Already in correct slot
+
+            pos = sim_positions.get(desired_block)
+            if pos is None:
+                violations.append(Violation("BLOCK_NOT_FOUND", f"Block '{desired_block}' position unknown."))
+                continue
+
+            pick_joints = self.cfg.kin.inverse(pos["x"], pos["y"], grip_z)
+            place_joints = self.cfg.kin.inverse(slot.x, slot.y, grip_z)
+            if pick_joints is None:
+                violations.append(Violation("UNREACHABLE", f"Cannot reach block '{desired_block}'."))
+                continue
+            if place_joints is None:
+                violations.append(Violation("UNREACHABLE", f"Cannot reach slot '{slot_id}'."))
+                continue
+
+            operations.append(_PickPlaceOp(
+                block_id=desired_block,
+                block_label=block.label,
+                slot_id=slot_id,
+                slot_label=slot.label,
+                pick_x=pos["x"],
+                pick_y=pos["y"],
+                place_x=slot.x,
+                place_y=slot.y,
+            ))
+
+            # Update simulated state
+            sim_positions[desired_block] = {"x": slot.x, "y": slot.y}
+            if current_slot_of_block is not None:
+                del sim_slot_occupants[current_slot_of_block]
+            sim_slot_occupants[slot_id] = desired_block
+
+            est += self.cfg.kin.travel_seconds(prev_joints, pick_joints)
+            est += 3.0
+            est += self.cfg.kin.travel_seconds(pick_joints, place_joints)
+            est += 3.0
+            prev_joints = place_joints
+
+        if violations:
+            return {"ok": False, "plan_id": None, "violations": [v.__dict__ for v in violations]}
+
+        if not operations:
+            return {
+                "ok": True,
+                "plan_id": None,
+                "message": "No moves required — board already matches target.",
+                "violations": [],
+                "operations": [],
+                "est_seconds": 0,
+            }
+
+        # Check time budget
+        budget = float(self.cfg.limits["max_plan_seconds"])
+        if est > budget:
+            violations.append(Violation("TOO_SLOW", f"Plan needs {est:.0f}s; budget is {budget:.0f}s."))
+            return {"ok": False, "plan_id": None, "violations": [v.__dict__ for v in violations]}
+
+        # Check cell readiness
+        st = self.status()
+        if st["state"] in ("fault", "estop", "disconnected"):
+            violations.append(Violation("CELL_NOT_READY", f"Cell is {st['state']}."))
+            return {"ok": False, "plan_id": None, "violations": [v.__dict__ for v in violations]}
+
+        plan = _Plan(
+            plan_id="plan_arr_" + secrets.token_hex(5),
+            operations=operations,
+            sequence=list(target_state.values()),
+            est_seconds=est,
+            created=time.time(),
+        )
+        with self._lock:
+            self._plans[plan.plan_id] = plan
+
+        return {
+            "ok": True,
+            "plan_id": plan.plan_id,
+            "violations": [],
+            "operations": [
+                {
+                    "block": op.block_label,
+                    "block_id": op.block_id,
+                    "from": {"x": op.pick_x, "y": op.pick_y},
+                    "to": {"x": op.place_x, "y": op.place_y},
+                    "slot": op.slot_label,
+                }
+                for op in operations
+            ],
+            "est_seconds": round(est, 1),
+            "changes_made": len(changes),
+            "message": f"Plan requires {len(operations)} moves to reach target state.",
+        }
+
     # -- execution --------------------------------------------------------- #
 
     def execute_sort(self, plan_id: str) -> tuple[str | None, list[Violation]]:

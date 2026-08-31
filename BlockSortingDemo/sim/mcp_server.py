@@ -65,10 +65,46 @@ def plan_sort(sequence: list[str]) -> dict:
 
 
 @mcp.tool()
-def execute_sort(plan_id: str) -> dict:
-    """Execute a sort plan that plan_sort already approved.
+def plan_arrangement(target_state: dict[str, str]) -> dict:
+    """Plan moves to reach a desired board state with minimal changes.
 
-    Accepts only a plan_id from plan_sort: single-use, expiring.
+    This is the PRIMARY planning tool. It accepts a target state describing
+    which block should be in which slot. Only specify slots that need to change —
+    unmentioned slots remain as-is.
+
+    Parameters:
+        target_state: dict mapping slot_id to block_id
+            Keys: "slot_1", "slot_2", "slot_3"
+            Values: "green", "red", "yellow"
+
+    Examples:
+        {"slot_2": "green"}
+            → Put green in Slot 2, leave everything else unchanged.
+
+        {"slot_1": "red", "slot_3": "yellow"}
+            → Put red in Slot 1 and yellow in Slot 3, leave Slot 2 unchanged.
+
+        {"slot_1": "red", "slot_2": "green", "slot_3": "yellow"}
+            → Full arrangement: Red, Green, Yellow left to right.
+
+    The planner automatically:
+        - Detects conflicts (slot already occupied by wrong block)
+        - Relocates conflicting blocks to safe positions first
+        - Skips blocks already in their correct slot
+        - Computes the minimal set of moves
+
+    Returns a plan_id to pass to execute_sort, or violations if invalid.
+    After execute_sort, poll get_sort_status until done, then call
+    detect_blocks to verify the final state.
+    """
+    return _mgr.plan_arrangement(target_state)
+
+
+@mcp.tool()
+def execute_sort(plan_id: str) -> dict:
+    """Execute a plan that was approved by plan_sort or plan_arrangement.
+
+    Accepts a plan_id (single-use, expiring after 120 seconds).
     Returns a job_id to poll with get_sort_status.
     """
     job_id, violations = _mgr.execute_sort(plan_id)
