@@ -28,7 +28,23 @@ mcp = FastMCP("karini-block-sorting")
 
 _cfg = load_config()
 _mgr = CellManager(_cfg)
-_mgr.backend.home(_cfg)
+try:
+    _mgr.backend.home(_cfg)
+except Exception:
+    # For mqtt_proxy specifically: home() blocks waiting for a laptop-side
+    # agent to reply on robo/result. If no agent is subscribed yet (e.g.
+    # testing the MQTT publish path standalone, per
+    # docs/AGENT_MQTT_FLOW.md), this times out -- don't let that crash the
+    # whole server on startup; log it and continue. Tool calls that need a
+    # live agent will still fail/timeout individually until one connects,
+    # but the server itself stays up so the agent can connect and other
+    # tools (or a later home retry) can be exercised.
+    log.exception(
+        "startup home() failed (backend=%s) -- continuing without a "
+        "confirmed home position. If using mqtt_proxy, this is expected "
+        "until a laptop agent is subscribed and replying.",
+        _mgr.backend.name,
+    )
 log.info("block sorting cell manager up (backend=%s)", _mgr.backend.name)
 
 
@@ -176,7 +192,16 @@ def main() -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         app = build_app(mgr=_mgr)
-        web.run_app(app, host="127.0.0.1", port=8802, print=None, loop=loop)
+        # handle_signals=False: aiohttp's default tries to register a
+        # SIGINT handler for graceful shutdown, which only works in the
+        # process's MAIN thread -- this runs in a background thread, so
+        # that registration fails and crashes the whole process
+        # ("set_wakeup_fd only works in main thread of the main
+        # interpreter"). The main MCP server (mcp.run()) already owns
+        # signal handling for the process; this bridge server doesn't
+        # need its own.
+        web.run_app(app, host="127.0.0.1", port=8802, print=None, loop=loop,
+                    handle_signals=False)
 
     bridge_thread = threading.Thread(target=run_bridge, daemon=True)
     bridge_thread.start()
