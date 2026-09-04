@@ -33,6 +33,10 @@ class Joints:
     shoulder: float = 0.0
     elbow: float = 0.0
     wrist: float = 0.0
+    # Optional: the (x, y, z) target these joints were solved for. The real
+    # RoArm backend uses this to command XYZ directly (T:104) via the arm's
+    # own IK, bypassing our link-length model. Simulated backend ignores it.
+    target_xyz: tuple[float, float, float] | None = None
 
     def as_dict(self) -> dict[str, float]:
         return {
@@ -79,6 +83,12 @@ class Kinematics:
         self.r_min, self.r_max = envelope["radius"]
         self.z_min, self.z_max = envelope["z"]
 
+        # Passthrough (XYZ) mode: when the real arm does its own IK, we don't
+        # use our link-length model. inverse() returns a Joints carrying the
+        # target (x,y,z), validated only against the measured envelope. Enabled
+        # via arm.ik_mode: passthrough in cell.yaml.
+        self.passthrough = str(arm.get("ik_mode", "analytic")).lower() == "passthrough"
+
     # -- forward kinematics ------------------------------------------------ #
 
     def forward(self, j: Joints) -> Pose:
@@ -111,10 +121,24 @@ class Kinematics:
     def inverse(self, x: float, y: float, z: float) -> Joints | None:
         """Target (x, y, z) -> joint angles, or None if unreachable.
 
-        Constraint: gripper points straight down (tool pitch = -90 degrees).
-        This means the eoat hangs vertically, so the wrist joint compensates
-        to keep the tool pointing down regardless of shoulder+elbow angles.
+        In passthrough mode (real arm with onboard IK), we skip our link-length
+        model entirely: return a Joints carrying the target (x,y,z), validated
+        only against the measured envelope. The RoArm backend commands XYZ
+        (T:104) directly and the arm solves its own IK.
+
+        In analytic mode (simulation), solve joint angles from link lengths.
+
+        Constraint (analytic): gripper points straight down (tool pitch = -90).
         """
+        if self.passthrough:
+            # Validate against the measured cylindrical envelope only.
+            r = math.hypot(x, y)
+            if not (self.r_min <= r <= self.r_max):
+                return None
+            if not (self.z_min <= z <= self.z_max):
+                return None
+            return Joints(target_xyz=(x, y, z))
+
         # Base angle from x, y
         base_deg = math.degrees(math.atan2(y, x))
 

@@ -1,5 +1,9 @@
 aiohttp>=3.9
 PyYAML>=6.0
 fastmcp>=3.0
-# pyserial>=3.5   # lazy import, only for real arm
+paho-mqtt>=2.0    # MQTT relay (mqtt_proxy backend + laptop_agent.py)
+pyserial>=3.5     # USB serial control of the real RoArm (roarm backend)
 pytest>=8.0
+opencv-python>=4.9   # camera capture + grid overlay (vision/)
+openai>=1.40         # vision calls (vision/vlm_detect.py)
+python-dotenv>=1.0   # loads OPENAI_API_KEY from .env

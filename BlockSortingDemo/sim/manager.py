@@ -1126,6 +1126,9 @@ def _make_backend(cfg: CellConfig):
     if name == "roarm":
         from .backends.roarm import RoArmBackend
         return RoArmBackend()
+    if name == "mqtt_proxy":
+        from .backends.mqtt_proxy import MqttProxyBackend
+        return MqttProxyBackend()
     if name == "sim":
         from .backends.simulated import SimulatedBackend
         return SimulatedBackend()
