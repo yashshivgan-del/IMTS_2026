@@ -40,12 +40,16 @@ Message shapes
 Command (robo/cmd), published by EC2:
     {
       "id": "cmd_<hex>",         # correlation id
-      "op": "move_to" | "gripper" | "home" | "estop" | "clear_estop" | "connect" | "detect",
+      "op": "move_to" | "gripper" | "home" | "estop" | "clear_estop" | "connect" | "detect" | "detect_pick_place",
       # op-specific payload:
       "joints": {"base":.., "shoulder":.., "elbow":.., "wrist":..},  # move_to
       "action": "open" | "close",                                    # gripper
       # "detect" has no extra payload -- the laptop runs its own camera
       # pipeline and reports back whatever it currently sees.
+      "color": "green",                       # detect_pick_place: which
+      "cell_color": "#38846f",                # cfg.blocks color to pick,
+                                               # and the target cell's own
+                                               # background color
     }
 
 Result (robo/result), published by laptop:
@@ -58,6 +62,7 @@ Result (robo/result), published by laptop:
       "gripper": "open|closed|gripping",
       "held_block": "red" | null,
       "blocks": [{"id":.., "color":.., "x":.., "y":..}, ...],  # detect only
+      "pick_x": .., "pick_y": .., "place_x": .., "place_y": ..,  # detect_pick_place only
     }
 
 State (robo/state), published by laptop continuously:
@@ -103,6 +108,13 @@ OP_GRIPPER = "gripper"
 OP_ESTOP = "estop"
 OP_CLEAR_ESTOP = "clear_estop"
 OP_DETECT = "detect"
+# Distinct from OP_DETECT (which detects each cell.yaml block color's own
+# position): this detects a PICK position (an object) and a PLACE position
+# (a target cell inside a pink grid, marked by its own background color) --
+# see vision/detect_pick_place.py. Kept as a separate op instead of
+# overloading OP_DETECT's result shape (list of {id,color,x,y} blocks) with
+# a different, unrelated shape (single pick_x/pick_y/place_x/place_y).
+OP_DETECT_PICK_PLACE = "detect_pick_place"
 
 
 def new_cmd_id() -> str:

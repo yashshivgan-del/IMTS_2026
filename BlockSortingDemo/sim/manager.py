@@ -59,6 +59,11 @@ class _PickPlaceOp:
     pick_y: float
     place_x: float
     place_y: float
+    # Override height for the PLACE step only (falls back to grip_z if
+    # unset). Needed for placing into a raised surface (e.g. a grid
+    # platform) that sits at a different height than the table -- see
+    # heights.grid_top_z in cell.yaml.
+    place_z: float | None = None
 
 
 @dataclass
@@ -1112,6 +1117,170 @@ class CellManager:
 
         except Exception as e:
             log.exception("reset job failed")
+            job.state = JobState.FAILED
+            job.error = str(e)
+            with self._lock:
+                self._fault = str(e)
+        finally:
+            with self._lock:
+                self._active = None
+
+
+    # -- grid-cell pick/place (color-matched target cell) ------------------ #
+
+    def pick_into_grid_cell(self, color: str, cell_color: str) -> dict:
+        """Detect an object and a matching target grid cell, then pick the
+        object and place it into that cell.
+
+        Unlike plan_sort/execute_sort (which use PRE-KNOWN slot positions
+        from cell.yaml), this detects BOTH the pick position (the object)
+        and the place position (a color-marked cell inside a pink grid) via
+        the camera, live, on every call -- see
+        vision/detect_pick_place.py (Pi-side detection + pixel->arm
+        conversion) and MqttProxyBackend.detect_pick_place() (the relay).
+
+        Requires backend: mqtt_proxy (the only backend that implements
+        detect_pick_place() -- this flow is Pi-camera-driven, not
+        available in sim/roarm-direct modes).
+
+        Returns a job_id to poll with get_sort_status, same as
+        execute_sort/reset_blocks. Raises RuntimeError if detection fails
+        or the cell is not ready to accept a new job.
+        """
+        if not hasattr(self.backend, "detect_pick_place"):
+            raise RuntimeError(
+                f"backend '{self.backend.name}' does not support "
+                f"detect_pick_place -- this flow requires backend: mqtt_proxy"
+            )
+
+        with self._lock:
+            if self._active is not None:
+                raise RuntimeError("Cell is already running a job.")
+            if self._estop:
+                raise RuntimeError("Cell is in emergency stop.")
+            if self._fault:
+                raise RuntimeError(f"Cell fault: {self._fault}")
+            if time.time() < self._cooldown_until:
+                left = self._cooldown_until - time.time()
+                raise RuntimeError(f"Cooldown, {left:.1f}s remaining.")
+
+        detection = self.backend.detect_pick_place(color, cell_color)
+        grip_z = float(self.cfg.heights["grip_z"])
+        place_z = float(self.cfg.heights.get("grid_top_z", grip_z))
+
+        pick_joints = self.cfg.kin.inverse(detection["pick_x"], detection["pick_y"], grip_z)
+        if pick_joints is None:
+            raise RuntimeError(
+                f"detected pick position ({detection['pick_x']:.1f}, "
+                f"{detection['pick_y']:.1f}) is unreachable"
+            )
+        place_joints = self.cfg.kin.inverse(detection["place_x"], detection["place_y"], place_z)
+        if place_joints is None:
+            raise RuntimeError(
+                f"detected place position ({detection['place_x']:.1f}, "
+                f"{detection['place_y']:.1f}) is unreachable at z={place_z:.1f}"
+            )
+
+        op = _PickPlaceOp(
+            block_id=color,
+            block_label=self.cfg.blocks[color].label if color in self.cfg.blocks else color,
+            slot_id="grid_cell",
+            slot_label="Grid cell",
+            pick_x=detection["pick_x"],
+            pick_y=detection["pick_y"],
+            place_x=detection["place_x"],
+            place_y=detection["place_y"],
+            place_z=place_z,
+        )
+        plan = _Plan(
+            plan_id="plan_grid_" + secrets.token_hex(5),
+            operations=[op],
+            sequence=[color],
+            est_seconds=15.0,
+            created=time.time(),
+        )
+
+        with self._lock:
+            job = _Job(job_id="job_grid_" + secrets.token_hex(5), plan=plan)
+            self._jobs[job.job_id] = job
+            self._active = job
+
+        threading.Thread(target=self._run_grid_place, args=(job,), daemon=True).start()
+        return {"ok": True, "job_id": job.job_id, "detection": detection}
+
+    def _run_grid_place(self, job: _Job) -> None:
+        """Execute a single grid-cell pick/place op, respecting op.place_z."""
+        try:
+            job.state = JobState.RUNNING
+            cfg = self.cfg
+            lift_z = float(cfg.heights["lift_z"])
+            grip_z = float(cfg.heights["grip_z"])
+            approach_z = float(cfg.heights["approach_z"])
+
+            if not self.backend.homed:
+                job.current_action = "homing"
+                self.backend.home(cfg)
+
+            op = job.plan.operations[0]
+            place_z = op.place_z if op.place_z is not None else grip_z
+
+            job.current_action = f"pick:approach:{op.block_id}"
+            approach_joints = cfg.kin.inverse(op.pick_x, op.pick_y, approach_z)
+            if approach_joints is None:
+                raise RuntimeError(f"Cannot reach approach for {op.block_id}")
+            self.backend.move_to(approach_joints, cfg)
+
+            job.current_action = f"pick:open:{op.block_id}"
+            self.backend.gripper_open(cfg)
+
+            job.current_action = f"pick:lower:{op.block_id}"
+            grip_joints = cfg.kin.inverse(op.pick_x, op.pick_y, grip_z)
+            if grip_joints is None:
+                raise RuntimeError(f"Cannot reach grip for {op.block_id}")
+            self.backend.move_to(grip_joints, cfg)
+
+            job.current_action = f"pick:grab:{op.block_id}"
+            self.backend.gripper_close(cfg)
+
+            job.current_action = f"pick:lift:{op.block_id}"
+            lift_joints = cfg.kin.inverse(op.pick_x, op.pick_y, lift_z)
+            if lift_joints is None:
+                raise RuntimeError(f"Cannot reach lift for {op.block_id}")
+            self.backend.move_to(lift_joints, cfg)
+
+            job.current_action = f"place:move:{op.slot_id}"
+            place_lift_joints = cfg.kin.inverse(op.place_x, op.place_y, lift_z)
+            if place_lift_joints is None:
+                raise RuntimeError(f"Cannot reach place lift for {op.slot_id}")
+            self.backend.move_to(place_lift_joints, cfg)
+
+            job.current_action = f"place:lower:{op.slot_id}"
+            place_joints = cfg.kin.inverse(op.place_x, op.place_y, place_z)
+            if place_joints is None:
+                raise RuntimeError(f"Cannot reach place at z={place_z:.1f} for {op.slot_id}")
+            self.backend.move_to(place_joints, cfg)
+
+            job.current_action = f"place:release:{op.slot_id}"
+            self.backend.gripper_open(cfg)
+
+            job.current_action = f"place:lift:{op.slot_id}"
+            self.backend.move_to(place_lift_joints, cfg)
+
+            job.completed_ops.append({
+                "block": op.block_label,
+                "block_id": op.block_id,
+                "slot": op.slot_label,
+                "slot_id": op.slot_id,
+            })
+
+            job.current_action = "homing"
+            self.backend.home(cfg)
+
+            job.state = JobState.DONE
+            job.current_action = "complete"
+
+        except Exception as e:
+            log.exception("grid-place job failed")
             job.state = JobState.FAILED
             job.error = str(e)
             with self._lock:

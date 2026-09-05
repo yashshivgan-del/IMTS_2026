@@ -158,6 +158,35 @@ def reset_blocks() -> dict:
     return _mgr.reset_blocks()
 
 
+@mcp.tool()
+def pick_into_grid_cell(color: str, cell_color: str) -> dict:
+    """Detect an object and a color-marked target cell, then pick the
+    object and place it into that cell.
+
+    Unlike plan_sort/execute_sort (which use fixed, pre-configured slot
+    positions), this LIVE-DETECTS both the pick position (the object on
+    the table) and the place position (a cell inside a grid, marked by its
+    own background color) via the camera on every call -- no plan_sort
+    step needed first.
+
+    Parameters:
+        color: the object's color id (e.g. "green") -- must be a color
+            configured in cell.yaml's blocks section.
+        cell_color: hex color of the target cell's background (e.g.
+            "#38846f") -- sample it with click_sample_color.py if unsure.
+
+    Requires backend: mqtt_proxy (this flow is Pi-camera-driven).
+
+    Returns a job_id to poll with get_sort_status (same as execute_sort),
+    plus the detected pick/place coordinates for reference. Raises if
+    detection fails (grid or object not found) or the cell isn't ready.
+    """
+    try:
+        return _mgr.pick_into_grid_cell(color, cell_color)
+    except RuntimeError as e:
+        return {"ok": False, "error": str(e)}
+
+
 def main() -> None:
     import argparse
 

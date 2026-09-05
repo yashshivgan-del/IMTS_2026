@@ -359,6 +359,32 @@ class MqttProxyBackend:
                     })
             return results
 
+    def detect_pick_place(self, color: str, cell_color: str) -> dict:
+        """Publish a "detect_pick_place" command and relay the laptop's
+        pixel->arm-converted pick/place coordinates.
+
+        Unlike detect_blocks(), this is NOT part of the ArmBackend
+        interface -- it's specific to the grid-cell pick/place flow (see
+        manager.py's pick_into_grid_cell()), so callers use it directly
+        rather than through the generic backend abstraction.
+
+        Returns {"pick_x", "pick_y", "place_x", "place_y"}. Raises
+        RuntimeError if the laptop agent does not reply or reports a
+        detection failure (e.g. grid or object not found) -- no silent
+        fallback here, since a wrong guess means a bad physical move.
+        """
+        result = self._request(proto.OP_DETECT_PICK_PLACE, {
+            "color": color, "cell_color": cell_color,
+        })
+        if not result.get("ok"):
+            raise RuntimeError(f"detect_pick_place failed: {result.get('error')}")
+        return {
+            "pick_x": result["pick_x"],
+            "pick_y": result["pick_y"],
+            "place_x": result["place_x"],
+            "place_y": result["place_y"],
+        }
+
     # -- state query ------------------------------------------------------- #
 
     def get_block_positions(self) -> dict[str, dict[str, float]]:
