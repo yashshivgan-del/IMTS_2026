@@ -168,15 +168,11 @@ class MqttProxyBackend:
         return self._connected
 
     def detect_kit_plan(self, placements: list[dict]) -> list[dict]:
-        """Detect all blocks and return coordinates for each placement.
-
-        Each placement dict must have 'color', 'cell', and 'seq'.
-        Returns the same list with 'pick_x', 'pick_y', 'place_x', 'place_y' added.
-        """
+        """Detect all blocks and return coordinates for each placement."""
         result = self._request(
             proto.OP_DETECT_KIT_PLAN,
             {"placements": placements},
-            timeout=self._cmd_timeout,
+            timeout=max(self._cmd_timeout, 45.0),  # detection can take 15-20s on Pi
         )
         if not result.get("ok"):
             raise RuntimeError(f"detect_kit_plan failed: {result.get('error')}")
