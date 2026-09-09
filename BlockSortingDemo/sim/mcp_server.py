@@ -214,20 +214,6 @@ def execute_plan(placements: list[dict]) -> dict:
     completed = _mgr.backend.execute_plan(placements)
     return {"completed": completed}
 
-    The robot will physically pick each block from its current position
-    and move it back to its original scattered position on the table.
-
-    Use this to:
-    - Clear all slots and move blocks back to starting positions
-    - Remove blocks from slots physically
-    - Prepare for a fresh sort
-    - Start over between demo runs
-
-    Returns a job_id to poll with get_sort_status (same as execute_sort).
-    If blocks are already at starting positions, returns immediately.
-    """
-    return _mgr.reset_blocks()
-
 
 def main() -> None:
     import argparse
