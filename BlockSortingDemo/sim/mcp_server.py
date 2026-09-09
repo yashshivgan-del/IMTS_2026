@@ -159,32 +159,74 @@ def reset_blocks() -> dict:
 
 
 @mcp.tool()
-def pick_into_grid_cell(color: str, cell_color: str) -> dict:
-    """Detect an object and a color-marked target cell, then pick the
-    object and place it into that cell.
+def detect_kit_plan(placements: list[dict]) -> dict:
+    """Detect all blocks and return their arm coordinates for a kit plan.
 
-    Unlike plan_sort/execute_sort (which use fixed, pre-configured slot
-    positions), this LIVE-DETECTS both the pick position (the object on
-    the table) and the place position (a cell inside a grid, marked by its
-    own background color) via the camera on every call -- no plan_sort
-    step needed first.
+    This is phase 1 of the two-phase kit plan flow. Send the desired
+    placements (color, cell, seq) and get back the detected pick/place
+    coordinates for each. Review them, then call execute_plan to run.
 
     Parameters:
-        color: the object's color id (e.g. "green") -- must be a color
-            configured in cell.yaml's blocks section.
-        cell_color: hex color of the target cell's background (e.g.
-            "#38846f") -- sample it with click_sample_color.py if unsure.
+        placements: list of dicts, each with:
+            - color: block color id (e.g. "green", "yellow", "orange")
+            - cell:  target grid cell (e.g. "A1", "B2", "C1")
+            - seq:   execution order (1 = first, 2 = second, etc.)
 
-    Requires backend: mqtt_proxy (this flow is Pi-camera-driven).
+    Example:
+        [
+          {"color": "green",  "cell": "A2", "seq": 1},
+          {"color": "yellow", "cell": "B2", "seq": 2},
+          {"color": "orange", "cell": "C2", "seq": 3},
+          {"color": "orange", "cell": "B1", "seq": 4}
+        ]
 
-    Returns a job_id to poll with get_sort_status (same as execute_sort),
-    plus the detected pick/place coordinates for reference. Raises if
-    detection fails (grid or object not found) or the cell isn't ready.
+    Returns the same list with pick_x, pick_y, place_x, place_y added.
+    Pass the result directly to execute_plan.
     """
-    try:
-        return _mgr.pick_into_grid_cell(color, cell_color)
-    except RuntimeError as e:
-        return {"ok": False, "error": str(e)}
+    if not hasattr(_mgr.backend, "detect_kit_plan"):
+        return {"error": "detect_kit_plan not supported by current backend"}
+    resolved = _mgr.backend.detect_kit_plan(placements)
+    return {"placements": resolved}
+
+
+@mcp.tool()
+def execute_plan(placements: list[dict]) -> dict:
+    """Execute a pre-resolved kit plan with explicit coordinates.
+
+    This is phase 2 of the two-phase kit plan flow. Takes the output of
+    detect_kit_plan (with pick/place coordinates added) and executes the
+    placements in seq order.
+
+    Parameters:
+        placements: list of dicts, each with:
+            - color:   block color id
+            - cell:    target grid cell
+            - seq:     execution order (sorted ascending)
+            - pick_x:  arm x coordinate to pick from (mm)
+            - pick_y:  arm y coordinate to pick from (mm)
+            - place_x: arm x coordinate to place at (mm)
+            - place_y: arm y coordinate to place at (mm)
+
+    Returns list of completed placements with color, cell, seq.
+    """
+    if not hasattr(_mgr.backend, "execute_plan"):
+        return {"error": "execute_plan not supported by current backend"}
+    completed = _mgr.backend.execute_plan(placements)
+    return {"completed": completed}
+
+    The robot will physically pick each block from its current position
+    and move it back to its original scattered position on the table.
+
+    Use this to:
+    - Clear all slots and move blocks back to starting positions
+    - Remove blocks from slots physically
+    - Prepare for a fresh sort
+    - Start over between demo runs
+
+    Returns a job_id to poll with get_sort_status (same as execute_sort).
+    If blocks are already at starting positions, returns immediately.
+    """
+    return _mgr.reset_blocks()
 
 
 def main() -> None:

@@ -101,7 +101,15 @@ class MqttProxyBackend:
                 "Install with: pip install paho-mqtt"
             ) from e
 
-        client = mqtt.Client(client_id=client_id, clean_session=True)
+        # See laptop_agent.py's connect() for why VERSION1 is pinned
+        # explicitly: paho-mqtt >=2.0 defaults to VERSION2's 5-arg callback
+        # signatures, which silently mismatch this file's 4-arg
+        # on_connect/on_message and never fire (no crash, just nothing
+        # happens -- easy to mistake for a hung connection).
+        client = mqtt.Client(
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION1,
+            client_id=client_id, clean_session=True,
+        )
 
         if use_tls:
             # AWS IoT Core (and most managed MQTT brokers) authenticate via
@@ -158,6 +166,36 @@ class MqttProxyBackend:
 
     def is_connected(self) -> bool:
         return self._connected
+
+    def detect_kit_plan(self, placements: list[dict]) -> list[dict]:
+        """Detect all blocks and return coordinates for each placement.
+
+        Each placement dict must have 'color', 'cell', and 'seq'.
+        Returns the same list with 'pick_x', 'pick_y', 'place_x', 'place_y' added.
+        """
+        result = self._request(
+            proto.OP_DETECT_KIT_PLAN,
+            {"placements": placements},
+            timeout=self._cmd_timeout,
+        )
+        if not result.get("ok"):
+            raise RuntimeError(f"detect_kit_plan failed: {result.get('error')}")
+        return result.get("placements", [])
+
+    def execute_plan(self, placements: list[dict]) -> list[dict]:
+        """Execute a pre-resolved plan. Each placement must have:
+        color, cell, seq, pick_x, pick_y, place_x, place_y.
+        Placements are sorted by 'seq' on the laptop side.
+        Returns list of completed placements.
+        """
+        result = self._request(
+            proto.OP_EXECUTE_PLAN,
+            {"placements": placements},
+            timeout=self._cmd_timeout * len(placements),  # scale timeout with count
+        )
+        if not result.get("ok"):
+            raise RuntimeError(f"execute_plan failed: {result.get('error')}")
+        return result.get("completed", [])
 
     def release(self) -> None:
         self._connected = False
@@ -358,32 +396,6 @@ class MqttProxyBackend:
                         "confidence": 1.0,
                     })
             return results
-
-    def detect_pick_place(self, color: str, cell_color: str) -> dict:
-        """Publish a "detect_pick_place" command and relay the laptop's
-        pixel->arm-converted pick/place coordinates.
-
-        Unlike detect_blocks(), this is NOT part of the ArmBackend
-        interface -- it's specific to the grid-cell pick/place flow (see
-        manager.py's pick_into_grid_cell()), so callers use it directly
-        rather than through the generic backend abstraction.
-
-        Returns {"pick_x", "pick_y", "place_x", "place_y"}. Raises
-        RuntimeError if the laptop agent does not reply or reports a
-        detection failure (e.g. grid or object not found) -- no silent
-        fallback here, since a wrong guess means a bad physical move.
-        """
-        result = self._request(proto.OP_DETECT_PICK_PLACE, {
-            "color": color, "cell_color": cell_color,
-        })
-        if not result.get("ok"):
-            raise RuntimeError(f"detect_pick_place failed: {result.get('error')}")
-        return {
-            "pick_x": result["pick_x"],
-            "pick_y": result["pick_y"],
-            "place_x": result["place_x"],
-            "place_y": result["place_y"],
-        }
 
     # -- state query ------------------------------------------------------- #
 
