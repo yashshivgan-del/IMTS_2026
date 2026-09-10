@@ -190,6 +190,31 @@ def detect_kit_plan(placements: list[dict]) -> dict:
 
 
 @mcp.tool()
+def execute_single_placement(placement: dict) -> dict:
+    """Execute a single block placement with explicit coordinates.
+
+    Call this once per block after detect_kit_plan. Completes in ~25-30 seconds.
+    Call in seq order (seq=1 first, then seq=2, etc.).
+
+    Parameters:
+        placement: dict with:
+            - color:   block color id (e.g. "green")
+            - cell:    target grid cell (e.g. "A2")
+            - seq:     sequence number (for ordering)
+            - pick_x:  arm x coordinate to pick from (mm)
+            - pick_y:  arm y coordinate to pick from (mm)
+            - place_x: arm x coordinate to place at (mm)
+            - place_y: arm y coordinate to place at (mm)
+
+    Returns placement result with color, cell, seq, and pick/place status.
+    """
+    if not hasattr(_mgr.backend, "execute_single_placement"):
+        return {"error": "execute_single_placement not supported by current backend"}
+    completed = _mgr.backend.execute_single_placement(placement)
+    return completed
+
+
+@mcp.tool()
 def execute_plan(placements: list[dict]) -> dict:
     """Execute a pre-resolved kit plan with explicit coordinates.
 

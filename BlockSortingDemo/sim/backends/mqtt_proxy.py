@@ -178,7 +178,18 @@ class MqttProxyBackend:
             raise RuntimeError(f"detect_kit_plan failed: {result.get('error')}")
         return result.get("placements", [])
 
-    def execute_plan(self, placements: list[dict]) -> list[dict]:
+    def execute_single_placement(self, placement: dict) -> dict:
+        """Execute a single placement. Must have color, cell, seq, pick_x, pick_y, place_x, place_y.
+        Returns the completed placement with pick/place settle info.
+        """
+        result = self._request(
+            proto.OP_EXECUTE_SINGLE,
+            {"placement": placement},
+            timeout=max(self._cmd_timeout, 45.0),  # one block ~25-30s
+        )
+        if not result.get("ok"):
+            raise RuntimeError(f"execute_single_placement failed: {result.get('error')}")
+        return result.get("completed", {})
         """Execute a pre-resolved plan. Each placement must have:
         color, cell, seq, pick_x, pick_y, place_x, place_y.
         Placements are sorted by 'seq' on the laptop side.
