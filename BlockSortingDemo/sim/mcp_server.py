@@ -159,6 +159,60 @@ def reset_blocks() -> dict:
 
 
 @mcp.tool()
+def validate_placement() -> dict:
+    """Capture the mat with the camera and use a vision model to describe
+    the current block arrangement on the grid.
+
+    Call this after all placements are complete to verify the final state.
+    Returns a text description of where each block is on the grid.
+    """
+    import os, base64
+    try:
+        import openai
+    except ImportError:
+        return {"error": "openai package not installed on EC2"}
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return {"error": "OPENAI_API_KEY not set on EC2"}
+
+    if not hasattr(_mgr.backend, "capture_image"):
+        return {"error": "capture_image not supported by current backend"}
+
+    image_b64 = _mgr.backend.capture_image()
+    if not image_b64:
+        return {"error": "No image returned from Pi"}
+
+    client = openai.OpenAI(api_key=api_key)
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "This is a top-down view of a robotic sorting mat. "
+                        "There is a pink grid in the image with 3 rows and 2 columns (6 cells total). "
+                        "Rows are labeled A (back), B (middle), C (front). Columns are 1 (right) and 2 (left). "
+                        "Describe which colored blocks (green, yellow, orange) are in which cells. "
+                        "If a cell is empty, say so. Be concise."
+                    )
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}
+                }
+            ]
+        }],
+        max_tokens=300,
+    )
+    description = response.choices[0].message.content
+    log.info("validate_placement VLM response: %s", description)
+    return {"description": description}
+
+
+@mcp.tool()
 def detect_kit_plan(placements: list[dict]) -> dict:
     """Detect all blocks and return their arm coordinates for a kit plan.
 

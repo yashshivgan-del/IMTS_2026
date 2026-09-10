@@ -178,6 +178,13 @@ class MqttProxyBackend:
             raise RuntimeError(f"detect_kit_plan failed: {result.get('error')}")
         return result.get("placements", [])
 
+    def capture_image(self) -> str:
+        """Ask Pi to capture a frame and return it as base64 JPEG."""
+        result = self._request(proto.OP_CAPTURE_IMAGE, {}, timeout=15.0)
+        if not result.get("ok"):
+            raise RuntimeError(f"capture_image failed: {result.get('error')}")
+        return result.get("image_b64", "")
+
     def execute_single_placement(self, placement: dict) -> dict:
         """Execute a single placement. Must have color, cell, seq, pick_x, pick_y, place_x, place_y.
         Returns the completed placement with pick/place settle info.
