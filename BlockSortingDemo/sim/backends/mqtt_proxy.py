@@ -187,7 +187,7 @@ class MqttProxyBackend:
         result = self._request(
             proto.OP_EXECUTE_PLAN,
             {"placements": placements},
-            timeout=max(self._cmd_timeout * len(placements), 60.0 * len(placements)),
+            timeout=max(self._cmd_timeout * len(placements), 90.0 * len(placements)),
         )
         if not result.get("ok"):
             raise RuntimeError(f"execute_plan failed: {result.get('error')}")
