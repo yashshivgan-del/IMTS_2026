@@ -159,6 +159,21 @@ def reset_blocks() -> dict:
 
 
 @mcp.tool()
+def reset_arm() -> dict:
+    """Send the arm to its initialization position.
+
+    Call this if the arm is in an unexpected position, stuck, or after an error.
+    The arm will run its firmware initialization routine and return to the safe home pose.
+    Returns ok when complete.
+    """
+    try:
+        _mgr.backend.home(_cfg, do_init=True)
+        return {"ok": True, "message": "Arm returned to init position"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@mcp.tool()
 def validate_placement() -> dict:
     """Capture the mat with the camera and use a vision model to describe
     the current block arrangement on the grid.

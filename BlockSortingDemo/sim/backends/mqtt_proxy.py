@@ -305,8 +305,9 @@ class MqttProxyBackend:
 
     # -- motion ------------------------------------------------------------ #
 
-    def home(self, cfg: CellConfig) -> None:
-        result = self._request(proto.OP_HOME, {})
+    def home(self, cfg: CellConfig, do_init: bool = False) -> None:
+        op = proto.OP_INIT if do_init else proto.OP_HOME
+        result = self._request(op, {})
         if not result.get("ok"):
             raise RuntimeError(f"home failed: {result.get('error')}")
         self._homed = True
