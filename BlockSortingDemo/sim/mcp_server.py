@@ -192,11 +192,26 @@ def validate_placement() -> dict:
                 {
                     "type": "text",
                     "text": (
-                        "This is a top-down view of a robotic sorting mat. "
-                        "There is a pink grid in the image with 3 rows and 2 columns (6 cells total). "
-                        "Rows are labeled A (back), B (middle), C (front). Columns are 1 (right) and 2 (left). "
-                        "Describe which colored blocks (green, yellow, orange) are in which cells. "
-                        "If a cell is empty, say so. Be concise."
+                        "This is a top-down view of a robotic arm sorting mat. "
+                        "There are TWO grids visible:\n"
+                        "1. A LARGER PINK grid (6 cells: 3 rows x 2 columns) — this is the PLACEMENT grid. "
+                        "Rows are labeled A (back/far from arm), B (middle), C (front/closest to arm). "
+                        "Columns are 1 (right) and 2 (left). Cell names: A1, A2, B1, B2, C1, C2.\n"
+                        "2. A SMALLER grid (4 cells) — this is just the pick-up zone, IGNORE IT.\n\n"
+                        "Please analyze the image and tell me:\n"
+                        "1. For each cell in the LARGE PINK grid (A1, A2, B1, B2, C1, C2): is there a block? If yes, what color (green, yellow, or orange)?\n"
+                        "2. Is the robotic arm inside the large pink grid? It should NOT be inside the grid after placement.\n"
+                        "3. Are all blocks fully inside their grid cells or are any hanging over the edge?\n"
+                        "4. Overall: did the placements look successful?\n\n"
+                        "Be specific and concise. Format your answer as:\n"
+                        "- A1: [color or empty]\n"
+                        "- A2: [color or empty]\n"
+                        "- B1: [color or empty]\n"
+                        "- B2: [color or empty]\n"
+                        "- C1: [color or empty]\n"
+                        "- C2: [color or empty]\n"
+                        "- Arm in grid: [yes/no]\n"
+                        "- Assessment: [success/issues found]"
                     )
                 },
                 {
