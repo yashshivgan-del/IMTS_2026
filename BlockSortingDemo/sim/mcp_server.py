@@ -215,11 +215,13 @@ def validate_placement() -> dict:
                     "type": "text",
                     "text": (
                         "This is a top-down view of a robotic arm sorting mat. "
+                        "IMPORTANT ORIENTATION: There is a BLACK CIRCLE marker in the TOP-LEFT corner of the mat — "
+                        "use this as your reference point. The top of the image (where the black circle is) "
+                        "is the TOP of the mat.\n\n"
                         "There are TWO grids visible:\n"
                         "1. A LARGER PINK grid (6 cells: 3 rows x 2 columns) — this is the PLACEMENT grid. "
-                        "The grid is oriented so that the arm base is at the BOTTOM of the image. "
-                        "Row A is the INNERMOST row (farthest from the arm, toward the top of the image). "
-                        "Row C is the OUTERMOST row (closest to the arm, toward the bottom). "
+                        "Row A is at the TOP of the pink grid (same side as the black circle marker). "
+                        "Row C is at the BOTTOM of the pink grid (closest to the arm base). "
                         "Column 1 is on the RIGHT side, column 2 is on the LEFT side. "
                         "So A1=top-right, A2=top-left, B1=middle-right, B2=middle-left, C1=bottom-right, C2=bottom-left.\n"
                         "2. A SMALLER grid (4 cells, no pink border) visible elsewhere — this is just the pick-up zone, IGNORE IT.\n\n"
