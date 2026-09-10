@@ -17,6 +17,13 @@ from __future__ import annotations
 
 import logging
 
+# Load .env file if present (for OPENAI_API_KEY etc.)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from fastmcp import FastMCP
 
 from .config import load_config
