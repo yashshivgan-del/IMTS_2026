@@ -188,16 +188,7 @@ def validate_placement() -> dict:
     Call this after all placements are complete to verify the final state.
     Returns a text description of where each block is on the grid.
     """
-    import os, base64
-    try:
-        import openai
-    except ImportError:
-        return {"error": "openai package not installed on EC2"}
-
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        return {"error": "OPENAI_API_KEY not set on EC2"}
-
+    import os, base64, json, boto3
     if not hasattr(_mgr.backend, "capture_image"):
         return {"error": "capture_image not supported by current backend"}
 
@@ -205,49 +196,81 @@ def validate_placement() -> dict:
     if not image_b64:
         return {"error": "No image returned from Pi"}
 
-    client = openai.OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{
+    prompt = (
+        "This is a top-down view of a mat containing TWO separate grids: "
+        "a LARGE grid with a PINK/MAGENTA border, and a SEPARATE SMALLER grid with a WHITE/PLAIN border. "
+        "Ignore the white-bordered grid completely.\n\n"
+        "STEP 1 — Raw visual inventory (do this BEFORE any coordinate labeling):\n"
+        "Look only at the pink-bordered grid. Count how many cells it has going left-to-right, "
+        "and how many going top-to-bottom, AS THEY VISUALLY APPEAR in the image. Do not assume "
+        "this matches any expected shape — actually count. State the result, e.g. "
+        "'this grid is N cells wide by M cells tall in the image.'\n\n"
+        "Then describe each of the 6 cells by its RAW VISUAL position (top-left, top-middle, top-right, "
+        "bottom-left, bottom-middle, bottom-right — or equivalent for whatever N x M you counted) "
+        "and what is in it. Ignore any printed text labels inside cells (e.g. 'B1', 'B2') — they are "
+        "unreliable and may not match true position.\n\n"
+        "When identifying block color, choose from this set only: green, yellow, orange, or empty. "
+        "There are no other block colors on this mat. Base your choice on the dominant body color "
+        "of the block, not reflections, shadows, or the printed text label on it. If a cell's content "
+        "doesn't clearly match green, yellow, or orange, it is empty — do not guess a different color.\n\n"
+        "STEP 2 — Orientation anchor:\n"
+        "Find the small BLACK square on the mat, outside the grid. Identify which single pink-grid cell "
+        "(using the raw visual positions from Step 1) is nearest to it. This is the ANCHOR cell.\n\n"
+        "STEP 3 — Determine true axes:\n"
+        "The pink grid's TRUE shape is 3 rows x 2 columns. One visual direction (the one with 3 cells "
+        "in a line, from your Step 1 count) is the ROW axis. The other (2 cells in a line) is the "
+        "COLUMN axis. This may be either the visual horizontal or vertical direction — use your actual "
+        "count from Step 1, not assumption.\n\n"
+        "STEP 4 — Assign row labels (A, B, C) along the ROW axis:\n"
+        "- The row containing the ANCHOR cell = A\n"
+        "- Next one moving away from the black square = B\n"
+        "- Farthest = C\n\n"
+        "STEP 5 — Assign column labels along the COLUMN axis (REVERSED numbering):\n"
+        "- Nearer to the black square = COLUMN 2\n"
+        "- Farther from the black square = COLUMN 1\n"
+        "- Apply independently to each row.\n\n"
+        "This gives 6 cells: A1, A2, B1, B2, C1, C2. Map each raw visual cell from Step 1 to its "
+        "label using Steps 2-5, then report — reuse the exact colors/empty status you recorded in "
+        "Step 1, do not re-guess colors here:\n"
+        "- A1: [color or empty]\n"
+        "- A2: [color or empty]\n"
+        "- B1: [color or empty]\n"
+        "- B2: [color or empty]\n"
+        "- C1: [color or empty]\n"
+        "- C2: [color or empty]\n\n"
+        "- Assessment: [success/issues found]"
+    )
+
+    bedrock = boto3.client(
+        "bedrock-runtime",
+        region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
+    )
+    body = json.dumps({
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 512,
+        "messages": [{
             "role": "user",
             "content": [
                 {
-                    "type": "text",
-                    "text": (
-                        "This is a top-down view of a mat containing TWO separate grids: "
-                        "a LARGE grid with a PINK/MAGENTA border, and a SEPARATE SMALLER grid with a WHITE/PLAIN border. "
-                        "Ignore the small white-bordered grid completely — do not report any block found inside it.\n\n"
-                        "ORIENTATION: There is a BLACK reference square near one corner of the mat. "
-                        "That black square marks the TOP-LEFT of the layout. Use it to orient yourself, "
-                        "regardless of how the image or any text labels are rotated.\n\n"
-                        "DO NOT read the printed text labels inside the pink grid cells — they may be rotated or partially "
-                        "covered by blocks and are unreliable. Instead, DETERMINE POSITION BY COUNTING:\n"
-                        "- The pink grid has 3 ROWS and 2 COLUMNS.\n"
-                        "- Starting from the corner nearest the black reference square, count rows top-to-bottom as A, B, C.\n"
-                        "- COLUMN NUMBERING IS FIXED: the LEFTMOST column is always COLUMN 2, "
-                        "and the RIGHTMOST column is always COLUMN 1. Do not number columns left-to-right as 1,2 — "
-                        "it is reversed: right-to-left as 1,2.\n"
-                        "- This gives 6 cells: A1 (top-right), A2 (top-left), B1 (middle-right), B2 (middle-left), "
-                        "C1 (bottom-right), C2 (bottom-left).\n\n"
-                        "For each of the 6 cells, report the block color by its counted position (or empty):\n"
-                        "- A1: [color or empty]\n"
-                        "- A2: [color or empty]\n"
-                        "- B1: [color or empty]\n"
-                        "- B2: [color or empty]\n"
-                        "- C1: [color or empty]\n"
-                        "- C2: [color or empty]\n\n"
-                        "- Assessment: [success/issues found]"
-                    )
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": image_b64,
+                    },
                 },
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}
-                }
-            ]
+                {"type": "text", "text": prompt},
+            ],
         }],
-        max_tokens=300,
+    })
+    response = bedrock.invoke_model(
+        modelId="us.anthropic.claude-sonnet-4-6",
+        contentType="application/json",
+        accept="application/json",
+        body=body,
     )
-    description = response.choices[0].message.content
+    result = json.loads(response["body"].read())
+    description = result["content"][0]["text"]
     log.info("validate_placement VLM response: %s", description)
     return {"description": description}
 
