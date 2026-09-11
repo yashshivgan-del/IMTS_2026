@@ -180,7 +180,7 @@ class MqttProxyBackend:
 
     def capture_image(self) -> str:
         """Ask Pi to capture a frame and return it as base64 JPEG."""
-        result = self._request(proto.OP_CAPTURE_IMAGE, {}, timeout=15.0)
+        result = self._request(proto.OP_CAPTURE_IMAGE, {}, timeout=30.0)
         if not result.get("ok"):
             raise RuntimeError(f"capture_image failed: {result.get('error')}")
         return result.get("image_b64", "")
